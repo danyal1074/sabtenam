@@ -608,14 +608,13 @@
                 </select>
 
                 <select id="filterGrade" class="filter-select" onchange="applyFilters()">
-                    <option value="">📚 همه پایه‌ها</option>
-                    <option value="پایه ششم">پایه ششم</option>
-                    <option value="پایه هفتم">پایه هفتم</option>
-                    <option value="پایه هشتم">پایه هشتم</option>
-                    <option value="پایه نهم">پایه نهم</option>
-                    <option value="پایه دهم">پایه دهم</option>
-                    <option value="پایه یازدهم">پایه یازدهم</option>
-                    <option value="پایه دوازدهم">پایه دوازدهم</option>
+                    <option value="">📚 همه پایه‌ها (چهارم تا نهم)</option>
+                    <option value="پایه چهارم">پایه چهارم ابتدایی</option>
+                    <option value="پایه پنجم">پایه پنجم ابتدایی</option>
+                    <option value="پایه ششم">پایه ششم ابتدایی</option>
+                    <option value="پایه هفتم">پایه هفتم (دوره اول متوسطه)</option>
+                    <option value="پایه هشتم">پایه هشتم (دوره اول متوسطه)</option>
+                    <option value="پایه نهم">پایه نهم (دوره اول متوسطه)</option>
                 </select>
 
                 <select id="filterSchool" class="filter-select" onchange="applyFilters()">
@@ -762,13 +761,12 @@
             const cont = document.getElementById('gradeBarsContainer');
             cont.innerHTML = '';
             const grades = [
+                'پایه چهارم ابتدایی',
+                'پایه پنجم ابتدایی',
                 'پایه ششم ابتدایی',
                 'پایه هفتم (دوره اول متوسطه)',
                 'پایه هشتم (دوره اول متوسطه)',
-                'پایه نهم (دوره اول متوسطه)',
-                'پایه دهم (دوره دوم متوسطه)',
-                'پایه یازدهم (دوره دوم متوسطه)',
-                'پایه دوازدهم (دوره دوم متوسطه)'
+                'پایه نهم (دوره اول متوسطه)'
             ];
             grades.forEach(g => {
                 const cnt = s.grades[g] || 0;
