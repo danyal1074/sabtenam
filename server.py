@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-سرور اختصاصی سامانه ثبت‌نام کانون نخبه‌پروری شهید کاظمی آشتیانی
-شامل API ثبت‌نام عمومی، احراز هویت مدیر، آمار و خروجی اکسل
+سرور پیشرفته سامانه ثبت‌نام کانون نخبه‌پروری شهید کاظمی آشتیانی
+پشتیبانی از تفکیک جنسیت، آمار تحلیلی چندگانه، فیلترها و خروجی‌های گوناگون
 """
 
 import http.server
@@ -18,7 +18,6 @@ PORT = int(os.environ.get("PORT", 5050))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "registrations.db")
 
-# Admin Credentials
 ADMIN_USER = "mohamad"
 ADMIN_PASS = "123456789"
 VALID_TOKENS = set()
@@ -31,6 +30,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tracking_code TEXT UNIQUE,
             full_name TEXT,
+            gender TEXT DEFAULT 'نامشخص',
             father_name TEXT,
             national_code TEXT,
             birth_date TEXT,
@@ -42,6 +42,12 @@ def init_db():
             created_at TEXT
         )
     ''')
+    # Auto-migrate table if gender column doesn't exist
+    c.execute("PRAGMA table_info(students)")
+    columns = [row[1] for row in c.fetchall()]
+    if 'gender' not in columns:
+        c.execute("ALTER TABLE students ADD COLUMN gender TEXT DEFAULT 'نامشخص'")
+    
     conn.commit()
     conn.close()
 
@@ -73,6 +79,7 @@ class RegistrationHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 data = json.loads(body.decode('utf-8'))
                 full_name = data.get('fullName', '').strip()
+                gender = data.get('gender', 'نامشخص').strip()
                 father_name = data.get('fatherName', '').strip()
                 national_code = data.get('nationalCode', '').strip()
                 birth_date = data.get('birthDate', '').strip()
@@ -104,9 +111,9 @@ class RegistrationHandler(http.server.SimpleHTTPRequestHandler):
                     return
 
                 c.execute('''
-                    INSERT INTO students (tracking_code, full_name, father_name, national_code, birth_date, phone, school, grade, address, ip_address, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (tracking_code, full_name, father_name, national_code, birth_date, phone, school, grade, address, client_ip, created_at))
+                    INSERT INTO students (tracking_code, full_name, gender, father_name, national_code, birth_date, phone, school, grade, address, ip_address, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (tracking_code, full_name, gender, father_name, national_code, birth_date, phone, school, grade, address, client_ip, created_at))
                 conn.commit()
                 conn.close()
 
@@ -172,14 +179,14 @@ class RegistrationHandler(http.server.SimpleHTTPRequestHandler):
                 conn = sqlite3.connect(DB_FILE)
                 conn.row_factory = sqlite3.Row
                 c = conn.cursor()
-                c.execute('SELECT id, tracking_code, full_name, father_name, national_code, birth_date, phone, school, grade, address, created_at FROM students ORDER BY id DESC')
+                c.execute('SELECT id, tracking_code, full_name, gender, father_name, national_code, birth_date, phone, school, grade, address, created_at FROM students ORDER BY id DESC')
                 rows = [dict(row) for row in c.fetchall()]
                 conn.close()
                 self.send_json_response(200, {'success': True, 'records': rows})
             except Exception as e:
                 self.send_json_response(500, {'error': str(e)})
 
-        # 2. Admin Statistics
+        # 2. Admin Statistics with Gender, Grades, and Schools
         elif parsed.path.endswith('/api/admin/stats'):
             if not self.is_authenticated():
                 self.send_json_response(403, {'success': False, 'message': 'دسترسی غیرمجاز'})
@@ -187,18 +194,31 @@ class RegistrationHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 conn = sqlite3.connect(DB_FILE)
                 c = conn.cursor()
+                
+                # Total
                 c.execute('SELECT COUNT(*) FROM students')
                 total = c.fetchone()[0]
 
+                # Today
                 today_str = datetime.now().strftime("%Y-%m-%d")
                 c.execute('SELECT COUNT(*) FROM students WHERE created_at LIKE ?', (f'{today_str}%',))
                 today_count = c.fetchone()[0]
 
+                # Gender Breakdown
+                c.execute('SELECT gender, COUNT(*) FROM students GROUP BY gender')
+                gender_stats = dict(c.fetchall())
+
+                # Grade Breakdown
                 c.execute('SELECT grade, COUNT(*) FROM students GROUP BY grade')
                 grade_stats = dict(c.fetchall())
 
+                # Distinct Schools
                 c.execute('SELECT COUNT(DISTINCT school) FROM students')
                 schools_count = c.fetchone()[0]
+
+                # Top Schools
+                c.execute('SELECT school, COUNT(*) as cnt FROM students WHERE school != "" GROUP BY school ORDER BY cnt DESC LIMIT 5')
+                top_schools = [{"school": row[0], "count": row[1]} for row in c.fetchall()]
 
                 conn.close()
                 self.send_json_response(200, {
@@ -206,7 +226,9 @@ class RegistrationHandler(http.server.SimpleHTTPRequestHandler):
                     'total': total,
                     'today': today_count,
                     'schools': schools_count,
-                    'grades': grade_stats
+                    'gender': gender_stats,
+                    'grades': grade_stats,
+                    'top_schools': top_schools
                 })
             except Exception as e:
                 self.send_json_response(500, {'error': str(e)})
@@ -220,26 +242,49 @@ class RegistrationHandler(http.server.SimpleHTTPRequestHandler):
                 conn = sqlite3.connect(DB_FILE)
                 conn.row_factory = sqlite3.Row
                 c = conn.cursor()
-                c.execute('SELECT tracking_code, full_name, father_name, national_code, birth_date, phone, school, grade, address, created_at FROM students ORDER BY id ASC')
+                c.execute('SELECT tracking_code, full_name, gender, father_name, national_code, birth_date, phone, school, grade, address, created_at FROM students ORDER BY id ASC')
                 rows = c.fetchall()
                 conn.close()
 
-                csv_lines = ["\ufeffکد پیگیری,نام و نام خانوادگی,نام پدر,کد ملی,تاریخ تولد,شماره تماس,مدرسه,پایه تحصیلی,آدرس,تاریخ و زمان ثبت\n"]
+                csv_lines = ["\ufeffکد پیگیری,نام و نام خانوادگی,جنسیت,نام پدر,کد ملی,تاریخ تولد,شماره تماس,مدرسه,پایه تحصیلی,آدرس,تاریخ و زمان ثبت\n"]
                 for r in rows:
                     addr = (r['address'] or '').replace('\n', ' ').replace(',', '،').replace('"', '""')
-                    csv_lines.append(f'"{r["tracking_code"]}","{r["full_name"]}","{r["father_name"]}","{r["national_code"]}","{r["birth_date"]}","{r["phone"]}","{r["school"]}","{r["grade"]}","{addr}","{r["created_at"]}"\n')
+                    csv_lines.append(f'"{r["tracking_code"]}","{r["full_name"]}","{r["gender"] or "نامشخص"}","{r["father_name"]}","{r["national_code"]}","{r["birth_date"]}","{r["phone"]}","{r["school"]}","{r["grade"]}","{addr}","{r["created_at"]}"\n')
 
                 csv_data = "".join(csv_lines).encode('utf-8')
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/csv; charset=utf-8')
-                self.send_header('Content-Disposition', 'attachment; filename="ashtiani_students.csv"')
+                self.send_header('Content-Disposition', 'attachment; filename="ashtiani_all_students.csv"')
                 self.send_header('Content-Length', str(len(csv_data)))
                 self.end_headers()
                 self.wfile.write(csv_data)
             except Exception as e:
                 self.send_json_response(500, {'error': str(e)})
+
+        # 4. Admin JSON Export (Full Backup)
+        elif parsed.path.endswith('/api/admin/export-json'):
+            if not self.is_authenticated():
+                self.send_json_response(403, {'success': False, 'message': 'دسترسی غیرمجاز'})
+                return
+            try:
+                conn = sqlite3.connect(DB_FILE)
+                conn.row_factory = sqlite3.Row
+                c = conn.cursor()
+                c.execute('SELECT tracking_code, full_name, gender, father_name, national_code, birth_date, phone, school, grade, address, created_at FROM students ORDER BY id ASC')
+                rows = [dict(r) for r in c.fetchall()]
+                conn.close()
+
+                json_data = json.dumps(rows, ensure_ascii=False, indent=2).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Disposition', 'attachment; filename="ashtiani_backup.json"')
+                self.send_header('Content-Length', str(len(json_data)))
+                self.end_headers()
+                self.wfile.write(json_data)
+            except Exception as e:
+                self.send_json_response(500, {'error': str(e)})
         else:
-            # Static files (index.html, admin.html, etc.)
+            # Serve index.html, admin.html, etc.
             super().do_GET()
 
     def send_json_response(self, code, data):
