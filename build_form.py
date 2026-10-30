@@ -1075,7 +1075,7 @@ html_content = f"""<!DOCTYPE html>
 
             // Try sending to server if hosted
             try {{
-                const resp = await fetch('/api/register', {{
+                const resp = await fetch('api/register', {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify(record)
