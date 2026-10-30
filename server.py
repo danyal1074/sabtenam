@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-سرور اختصاصی ثبت‌نام کانون نخبه‌پروری دانشمند شهید کاظمی آشتیانی
-نوشته شده با کتابخانه‌های استاندارد پایتون (بدون نیاز به نصب پکیج اضافه)
-قابل اجرا روی انواع سرورهای لینوکس (اوبونتو، دبیان و...) و ویندوز
+سرور اختصاصی سامانه ثبت‌نام کانون نخبه‌پروری شهید کاظمی آشتیانی
+شامل API ثبت‌نام عمومی، احراز هویت مدیر، آمار و خروجی اکسل
 """
 
 import http.server
@@ -12,11 +11,17 @@ import sqlite3
 import os
 import sys
 import urllib.parse
+import secrets
 from datetime import datetime
 
-PORT = int(os.environ.get("PORT", 8080))
+PORT = int(os.environ.get("PORT", 5050))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "registrations.db")
+
+# Admin Credentials
+ADMIN_USER = "mohamad"
+ADMIN_PASS = "123456789"
+VALID_TOKENS = set()
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -44,11 +49,27 @@ class RegistrationHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=BASE_DIR, **kwargs)
 
+    def is_authenticated(self):
+        auth_header = self.headers.get('Authorization', '')
+        token = auth_header.replace('Bearer ', '').strip()
+        if not token:
+            parsed = urllib.parse.urlparse(self.path)
+            qs = urllib.parse.parse_qs(parsed.query)
+            token = qs.get('token', [''])[0].strip()
+        if not token:
+            cookie_header = self.headers.get('Cookie', '')
+            for cookie in cookie_header.split(';'):
+                if 'admin_token=' in cookie:
+                    token = cookie.split('admin_token=')[-1].strip()
+        return token in VALID_TOKENS
+
     def do_POST(self):
-        if self.path == '/api/register':
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length)
-            
+        parsed = urllib.parse.urlparse(self.path)
+        content_length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(content_length) if content_length > 0 else b'{}'
+        
+        # 1. Public Student Registration
+        if parsed.path.endswith('/api/register'):
             try:
                 data = json.loads(body.decode('utf-8'))
                 full_name = data.get('fullName', '').strip()
@@ -61,7 +82,7 @@ class RegistrationHandler(http.server.SimpleHTTPRequestHandler):
                 address = data.get('address', '').strip()
                 tracking_code = data.get('trackingCode') or f"KA-{int(datetime.now().timestamp()) % 1000000:06d}"
                 created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                client_ip = self.client_address[0]
+                client_ip = self.headers.get('X-Real-IP') or self.client_address[0]
 
                 if not (full_name and father_name and national_code and phone):
                     self.send_json_response(400, {'success': False, 'message': 'اطلاعات ضروری ناقص است.'})
@@ -70,7 +91,7 @@ class RegistrationHandler(http.server.SimpleHTTPRequestHandler):
                 conn = sqlite3.connect(DB_FILE)
                 c = conn.cursor()
                 
-                # Check for duplicate national code
+                # Check duplicate national code
                 c.execute('SELECT tracking_code FROM students WHERE national_code = ?', (national_code,))
                 existing = c.fetchone()
                 if existing:
@@ -91,17 +112,62 @@ class RegistrationHandler(http.server.SimpleHTTPRequestHandler):
 
                 self.send_json_response(200, {
                     'success': True,
-                    'message': 'ثبت‌نام با موفقیت ذخیره شد.',
+                    'message': 'اطلاعات با موفقیت ثبت شد.',
                     'trackingCode': tracking_code
                 })
             except Exception as e:
                 self.send_json_response(500, {'success': False, 'message': str(e)})
+
+        # 2. Admin Login
+        elif parsed.path.endswith('/api/admin/login'):
+            try:
+                data = json.loads(body.decode('utf-8'))
+                username = data.get('username', '').strip()
+                password = data.get('password', '').strip()
+
+                if username == ADMIN_USER and password == ADMIN_PASS:
+                    token = secrets.token_hex(24)
+                    VALID_TOKENS.add(token)
+                    self.send_json_response(200, {
+                        'success': True,
+                        'token': token,
+                        'user': ADMIN_USER
+                    })
+                else:
+                    self.send_json_response(401, {
+                        'success': False,
+                        'message': 'نام کاربری یا رمز عبور اشتباه است.'
+                    })
+            except Exception as e:
+                self.send_json_response(500, {'success': False, 'message': str(e)})
+
+        # 3. Admin Delete Record
+        elif parsed.path.endswith('/api/admin/delete'):
+            if not self.is_authenticated():
+                self.send_json_response(403, {'success': False, 'message': 'دسترسی غیرمجاز'})
+                return
+            try:
+                data = json.loads(body.decode('utf-8'))
+                student_id = data.get('id')
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                c.execute('DELETE FROM students WHERE id = ?', (student_id,))
+                conn.commit()
+                conn.close()
+                self.send_json_response(200, {'success': True, 'message': 'رکورد حذف شد.'})
+            except Exception as e:
+                self.send_json_response(500, {'success': False, 'message': str(e)})
         else:
-            self.send_json_response(404, {'error': 'مسیر مورد نظر یافت نشد'})
+            self.send_json_response(404, {'error': 'مسیر نامعتبر است'})
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path == '/api/submissions':
+        
+        # 1. Admin Submissions List
+        if parsed.path.endswith('/api/admin/submissions'):
+            if not self.is_authenticated():
+                self.send_json_response(403, {'success': False, 'message': 'ابتدا وارد پنل مدیریت شوید.'})
+                return
             try:
                 conn = sqlite3.connect(DB_FILE)
                 conn.row_factory = sqlite3.Row
@@ -112,7 +178,44 @@ class RegistrationHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json_response(200, {'success': True, 'records': rows})
             except Exception as e:
                 self.send_json_response(500, {'error': str(e)})
-        elif parsed.path == '/api/export-csv':
+
+        # 2. Admin Statistics
+        elif parsed.path.endswith('/api/admin/stats'):
+            if not self.is_authenticated():
+                self.send_json_response(403, {'success': False, 'message': 'دسترسی غیرمجاز'})
+                return
+            try:
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                c.execute('SELECT COUNT(*) FROM students')
+                total = c.fetchone()[0]
+
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                c.execute('SELECT COUNT(*) FROM students WHERE created_at LIKE ?', (f'{today_str}%',))
+                today_count = c.fetchone()[0]
+
+                c.execute('SELECT grade, COUNT(*) FROM students GROUP BY grade')
+                grade_stats = dict(c.fetchall())
+
+                c.execute('SELECT COUNT(DISTINCT school) FROM students')
+                schools_count = c.fetchone()[0]
+
+                conn.close()
+                self.send_json_response(200, {
+                    'success': True,
+                    'total': total,
+                    'today': today_count,
+                    'schools': schools_count,
+                    'grades': grade_stats
+                })
+            except Exception as e:
+                self.send_json_response(500, {'error': str(e)})
+
+        # 3. Admin CSV Export
+        elif parsed.path.endswith('/api/admin/export-csv'):
+            if not self.is_authenticated():
+                self.send_json_response(403, {'success': False, 'message': 'دسترسی غیرمجاز'})
+                return
             try:
                 conn = sqlite3.connect(DB_FILE)
                 conn.row_factory = sqlite3.Row
@@ -123,20 +226,20 @@ class RegistrationHandler(http.server.SimpleHTTPRequestHandler):
 
                 csv_lines = ["\ufeffکد پیگیری,نام و نام خانوادگی,نام پدر,کد ملی,تاریخ تولد,شماره تماس,مدرسه,پایه تحصیلی,آدرس,تاریخ و زمان ثبت\n"]
                 for r in rows:
-                    addr = (r['address'] or '').replace('\n', ' ').replace(',', '،')
+                    addr = (r['address'] or '').replace('\n', ' ').replace(',', '،').replace('"', '""')
                     csv_lines.append(f'"{r["tracking_code"]}","{r["full_name"]}","{r["father_name"]}","{r["national_code"]}","{r["birth_date"]}","{r["phone"]}","{r["school"]}","{r["grade"]}","{addr}","{r["created_at"]}"\n')
 
                 csv_data = "".join(csv_lines).encode('utf-8')
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/csv; charset=utf-8')
-                self.send_header('Content-Disposition', 'attachment; filename="kazemi_ashtiani_students.csv"')
+                self.send_header('Content-Disposition', 'attachment; filename="ashtiani_students.csv"')
                 self.send_header('Content-Length', str(len(csv_data)))
                 self.end_headers()
                 self.wfile.write(csv_data)
             except Exception as e:
                 self.send_json_response(500, {'error': str(e)})
         else:
-            # Serve index.html and static files
+            # Static files (index.html, admin.html, etc.)
             super().do_GET()
 
     def send_json_response(self, code, data):
@@ -151,8 +254,7 @@ class RegistrationHandler(http.server.SimpleHTTPRequestHandler):
 if __name__ == '__main__':
     init_db()
     print(f"🚀 سرور ثبت‌نام کانون کاظمی آشتیانی فعال شد.")
-    print(f"🌐 آدرس محلی: http://localhost:{PORT}")
-    print(f"💾 پایگاه داده: {DB_FILE}")
+    print(f"🌐 پورت: {PORT}")
     with socketserver.TCPServer(("", PORT), RegistrationHandler) as httpd:
         try:
             httpd.serve_forever()
