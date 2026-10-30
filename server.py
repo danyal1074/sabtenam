@@ -300,6 +300,7 @@ if __name__ == '__main__':
     init_db()
     print(f"🚀 سرور ثبت‌نام کانون کاظمی آشتیانی فعال شد.")
     print(f"🌐 پورت: {PORT}")
+    socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("", PORT), RegistrationHandler) as httpd:
         try:
             httpd.serve_forever()
