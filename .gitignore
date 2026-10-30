@@ -1,0 +1,4 @@
+*.db
+logo_base64.txt
+__pycache__/
+.DS_Store
