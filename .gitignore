@@ -1,4 +1,8 @@
 *.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
 logo_base64.txt
 __pycache__/
 .DS_Store

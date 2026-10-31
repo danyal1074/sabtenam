@@ -1,0 +1,22 @@
+[Unit]
+Description=Kazemi Ashtiani Registration Form
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/registration-form
+ExecStart=/usr/bin/python3 /var/www/registration-form/server.py
+Restart=always
+RestartSec=2
+Environment=PYTHONUNBUFFERED=1
+Environment=HOST=127.0.0.1
+Environment=PORT=5050
+Environment=REQUEST_TIMEOUT=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
